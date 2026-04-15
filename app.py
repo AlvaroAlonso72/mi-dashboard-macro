@@ -4,15 +4,15 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 
-# 1. Configuración de la página (Debe ser lo primero)
+# 1. Configuración de la página
 st.set_page_config(
-    page_title="Terminal Macro v1.0",
+    page_title="Terminal Macro Global",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Estilo CSS personalizado para un look más "Fintech"
+# Estilo CSS para mejorar la interfaz
 st.markdown("""
     <style>
     .main {
@@ -27,108 +27,130 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCIONES CON CACHÉ (24 HORAS = 86400 SEGUNDOS) ---
+# --- FUNCIONES CON CACHÉ (86400 segundos = 24 horas) ---
 
 @st.cache_data(ttl=86400)
 def obtener_nombres_paises():
-    """Obtiene la lista oficial de países y sus códigos ISO3"""
-    economias = wb.economy.info()
-    return {e['id']: e['value'] for e in economias.items}
+    """Descarga la lista de países del Banco Mundial"""
+    try:
+        economias = wb.economy.info()
+        return {e['id']: e['value'] for e in economias.items}
+    except:
+        return {"USA": "United States", "ESP": "Spain"} # Fallback básico
 
 @st.cache_data(ttl=86400)
 def cargar_datos_banco_mundial(indicador, paises):
-    """Descarga datos del Banco Mundial y los limpia"""
+    """Descarga y transpone los datos"""
     if not paises:
         return pd.DataFrame()
-    
-    # mrv=40 trae los últimos 40 años con datos
-    d = wb.data.DataFrame(indicador, paises, mrv=40).T
-    d.index = d.index.str.replace('YR', '').astype(int)
-    return d
+    try:
+        d = wb.data.DataFrame(indicador, paises, mrv=40).T
+        d.index = d.index.str.replace('YR', '').astype(int)
+        return d
+    except:
+        return pd.DataFrame()
 
-# --- LÓGICA DE LA APLICACIÓN ---
+# --- LÓGICA DE NAVEGACIÓN ---
 
 nombres_paises = obtener_nombres_paises()
 
-# BARRA LATERAL
 with st.sidebar:
-    st.title("🛡️ Filtros Globales")
-    st.info("Los datos se actualizan automáticamente cada 24h.")
+    st.title("🛡️ Panel de Control")
+    st.markdown("### Configuración de Datos")
     
     paises_seleccionados = st.multiselect(
         "Seleccionar Países:",
         options=list(nombres_paises.keys()),
-        default=["USA", "CHN", "ESP", "BRA"],
+        default=["USA", "CHN", "ESP", "BRA", "IND"],
         format_func=lambda x: nombres_paises[x]
     )
     
     st.divider()
-    st.caption(f"Última sincronización: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    st.caption(f"Actualización automática cada 24h")
+    st.caption(f"Sincronizado: {datetime.now().strftime('%H:%M:%S')}")
 
-# CUERPO PRINCIPAL
-st.title("📊 Sistema de Análisis de Tipos de Interés")
+# --- CUERPO PRINCIPAL ---
+
+st.title("📊 Terminal Macroeconómica Global")
 
 if not paises_seleccionados:
-    st.warning("⚠️ Por favor, selecciona al menos un país en la barra lateral para visualizar los datos.")
+    st.warning("👈 Selecciona países en la barra lateral para comenzar el análisis.")
 else:
-    # Creamos dos pestañas profesionales
-    tab_nominal, tab_real = st.tabs(["💵 Tasa Nominal (Lending Rate)", "📉 Tasa Real (Ajustada Inflación)"])
+    # Pestañas principales
+    tab_nom, tab_real, tab_info = st.tabs(["💵 Tasa Nominal", "📉 Tasa Real", "ℹ️ Ayuda"])
 
     # --- PESTAÑA NOMINAL ---
-    with tab_nominal:
-        st.subheader("Evolución de la Tasa de Interés Nominal")
-        st.markdown("_Tasa de interés que cobran los bancos por préstamos a clientes de primer orden._")
+    with tab_nom:
+        st.subheader("Tipos de Interés Nominales")
+        st.info("Tasa activa bancaria (Lending Rate): El interés que los bancos cobran por préstamos.")
         
         df_nom = cargar_datos_banco_mundial('FR.INR.LEND', paises_seleccionados)
         
         if not df_nom.empty:
-            # Renombrar columnas para el gráfico
-            df_nom.columns = [nombres_paises[c] for c in df_nom.columns]
+            # Limpieza y nombres de columnas
+            df_nom.columns = [nombres_paises.get(c, c) for c in df_nom.columns]
             
-            fig_nom = px.line(
-                df_nom, 
-                template="plotly_dark",
-                labels={'value': 'Tasa %', 'index': 'Año'},
-                color_discrete_sequence=px.colors.qualitative.Safe
-            )
-            fig_nom.update_layout(hovermode="x unified", legend_title="Países")
+            # Gráfico
+            fig_nom = px.line(df_nom, template="plotly_dark")
+            fig_nom.update_layout(hovermode="x unified", legend_title="Países", yaxis_title="Porcentaje %")
             st.plotly_chart(fig_nom, use_container_width=True)
             
-            # Métricas rápidas (Último dato disponible)
-            cols = st.columns(len(paises_seleccionados[:5])) # Máximo 5 columnas para no saturar
-            for i, pais in enumerate(paises_seleccionados[:5]):
-                ultimo_valor = df_nom[nombres_paises[pais]].dropna().iloc[-1]
-                cols[i].metric(nombres_paises[pais], f"{ultimo_valor:.2f}%", "Nominal")
+            # Métricas con ESCUDO DE SEGURIDAD para evitar IndexError
+            st.markdown("#### Últimos valores registrados")
+            cols = st.columns(len(paises_seleccionados[:6])) # Máximo 6 para evitar amontonamiento
+            for i, pais in enumerate(paises_seleccionados[:6]):
+                nombre_p = nombres_paises.get(pais, pais)
+                if nombre_p in df_nom.columns:
+                    serie = df_nom[nombre_p].dropna()
+                    if not serie.empty:
+                        valor = serie.iloc[-1]
+                        cols[i].metric(nombre_p, f"{valor:.2f}%")
+                    else:
+                        cols[i].metric(nombre_p, "N/D")
         else:
-            st.error("No hay datos de Tasa Nominal disponibles para la selección actual.")
+            st.error("No se encontraron datos nominales para los países seleccionados.")
 
     # --- PESTAÑA REAL ---
     with tab_real:
-        st.subheader("Evolución de la Tasa de Interés Real")
-        st.markdown("_Tasa de interés nominal ajustada por la inflación (deflactor del PIB)._")
+        st.subheader("Tipos de Interés Reales")
+        st.info("Tasa ajustada por inflación: Refleja el coste real del dinero tras descontar el aumento de precios.")
 
         df_real = cargar_datos_banco_mundial('FR.INR.RINR', paises_seleccionados)
 
         if not df_real.empty:
-            df_real.columns = [nombres_paises[c] for c in df_real.columns]
+            df_real.columns = [nombres_paises.get(c, c) for c in df_real.columns]
             
-            fig_real = px.line(
-                df_real, 
-                template="plotly_dark",
-                labels={'value': 'Tasa %', 'index': 'Año'},
-                color_discrete_sequence=px.colors.qualitative.Vivid
-            )
-            fig_real.update_layout(hovermode="x unified", legend_title="Países")
+            # Gráfico
+            fig_real = px.line(df_real, template="plotly_dark", color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig_real.update_layout(hovermode="x unified", legend_title="Países", yaxis_title="Porcentaje %")
             st.plotly_chart(fig_real, use_container_width=True)
             
-            # Métricas rápidas
-            cols_r = st.columns(len(paises_seleccionados[:5]))
-            for i, pais in enumerate(paises_seleccionados[:5]):
-                ultimo_valor_r = df_real[nombres_paises[pais]].dropna().iloc[-1]
-                cols_r[i].metric(nombres_paises[pais], f"{ultimo_valor_r:.2f}%", "Real")
+            # Métricas con ESCUDO DE SEGURIDAD
+            st.markdown("#### Últimos valores registrados")
+            cols_r = st.columns(len(paises_seleccionados[:6]))
+            for i, pais in enumerate(paises_seleccionados[:6]):
+                nombre_p = nombres_paises.get(pais, pais)
+                if nombre_p in df_real.columns:
+                    serie_r = df_real[nombre_p].dropna()
+                    if not serie_r.empty:
+                        valor_r = serie_r.iloc[-1]
+                        cols_r[i].metric(nombre_p, f"{valor_r:.2f}%")
+                    else:
+                        cols_r[i].metric(nombre_p, "N/D")
         else:
-            st.error("No hay datos de Tasa Real disponibles para la selección actual.")
+            st.error("No se encontraron datos reales para los países seleccionados.")
 
-# Pie de página
+    # --- PESTAÑA INFORMACIÓN ---
+    with tab_info:
+        st.markdown("""
+        ### Sobre esta herramienta
+        Este dashboard consume datos directamente de la API del **Banco Mundial**.
+        
+        * **Tasa Nominal:** Es la tasa de interés activa que cobran los bancos sobre préstamos.
+        * **Tasa Real:** Es la tasa nominal ajustada por la inflación medida a través del deflactor del PIB.
+        
+        **Nota sobre errores:** Si un país aparece como 'N/D' o no muestra línea en el gráfico, significa que no ha reportado datos oficiales al Banco Mundial para ese periodo específico.
+        """)
+
 st.divider()
-st.caption("Fuente: Banco Mundial (World Bank Open Data). Los datos pueden presentar lagunas según la política de reporte de cada país.")
+st.caption("Fuente de datos: World Bank Open Data (vía wbgapi) | Desarrollado con Python y Streamlit")
